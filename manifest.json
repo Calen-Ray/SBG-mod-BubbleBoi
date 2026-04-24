@@ -1,0 +1,9 @@
+{
+  "name": "BubbleBoi",
+  "version_number": "0.1.0",
+  "website_url": "https://example.invalid/BubbleBoi",
+  "description": "Lets players walk on water while the electromagnet shield is active.",
+  "dependencies": [
+    "BepInEx-BepInExPack-5.4.2100"
+  ]
+}

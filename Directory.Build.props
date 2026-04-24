@@ -1,0 +1,52 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblySearchPaths>$(AssemblySearchPaths);{HintPathFromItem}</AssemblySearchPaths>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <NoStdLib>true</NoStdLib>
+    <NoConfig>true</NoConfig>
+    <MSBuildWarningsAsMessages>MSB3243;MSB3245</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <Import Project="Developer.props" Condition="Exists('$(MSBuildThisFileDirectory)Developer.props')" />
+  <PropertyGroup>
+    <GameInstallDir Condition="'$(GameInstallDir)' == '' and '$(SBG_GAME_DIR)' != ''">$(SBG_GAME_DIR)</GameInstallDir>
+    <GameInstallDir Condition="'$(GameInstallDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Super Battle Golf</GameInstallDir>
+    <GameManagedDir>$(GameInstallDir)\Super Battle Golf_Data\Managed</GameManagedDir>
+    <R2ProfileDir Condition="'$(R2ProfileDir)' == ''">$(APPDATA)\r2modmanPlus-local\SuperBattleGolf\profiles\Default</R2ProfileDir>
+    <BepInExCoreDir>$(R2ProfileDir)\BepInEx\core</BepInExCoreDir>
+    <BepInExPluginsDir>$(R2ProfileDir)\BepInEx\plugins</BepInExPluginsDir>
+    <ThunderstoreTeam Condition="'$(ThunderstoreTeam)' == ''">Cray</ThunderstoreTeam>
+    <ThunderstorePackage>$(ThunderstoreTeam)-$(MSBuildProjectName)</ThunderstorePackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="mscorlib"><HintPath>$(GameManagedDir)\mscorlib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="System"><HintPath>$(GameManagedDir)\System.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="System.Core"><HintPath>$(GameManagedDir)\System.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="netstandard"><HintPath>$(GameManagedDir)\netstandard.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BepInEx"><HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(BepInExCoreDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="GameAssembly"><HintPath>$(GameManagedDir)\GameAssembly.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SharedAssembly"><HintPath>$(GameManagedDir)\SharedAssembly.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Mirror"><HintPath>$(GameManagedDir)\Mirror.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(GameManagedDir)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameManagedDir)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(GameManagedDir)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <Target Name="DeployToR2Modman" AfterTargets="Build" Condition="'$(SkipDeploy)' != 'true' and Exists('$(BepInExPluginsDir)')">
+    <PropertyGroup>
+      <PluginDeployDir>$(BepInExPluginsDir)\$(ThunderstorePackage)</PluginDeployDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\manifest.json" DestinationFolder="$(PluginDeployDir)" Condition="Exists('$(MSBuildProjectDirectory)\manifest.json')" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\README.md" DestinationFolder="$(PluginDeployDir)" Condition="Exists('$(MSBuildProjectDirectory)\README.md')" />
+    <Message Text="Deployed $(MSBuildProjectName) -> $(PluginDeployDir)" Importance="high" />
+  </Target>
+</Project>

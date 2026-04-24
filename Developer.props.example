@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- Example overrides for local development. Copy to Developer.props and edit. -->
+    <!-- <GameInstallDir>C:\Program Files (x86)\Steam\steamapps\common\Super Battle Golf</GameInstallDir> -->
+    <!-- <R2ProfileDir>$(APPDATA)\r2modmanPlus-local\SuperBattleGolf\profiles\Default</R2ProfileDir> -->
+  </PropertyGroup>
+</Project>

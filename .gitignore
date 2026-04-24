@@ -1,0 +1,31 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.pidb
+*.userprefs
+.vs/
+
+# IDE
+.idea/
+.vscode/
+
+# Build / packaging output
+artifacts/
+dist/
+*.zip
+
+# Developer-local overrides
+Developer.props
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Misc
+*.log
+
+# Track the official Thunderstore icon, ignore other scratch PNGs.
+*.png
+!icon.png
