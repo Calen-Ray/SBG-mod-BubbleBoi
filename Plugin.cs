@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Collections.Generic;
 using BepInEx;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -12,13 +13,35 @@ namespace BubbleBoi
     {
         public const string ModGuid = "sbg.bubbleboi";
         public const string ModName = "BubbleBoi";
-        public const string ModVersion = "0.1.1";
+        public const string ModVersion = "0.2.2";
 
         internal static ManualLogSource Log;
+        internal static Plugin Instance;
+        internal ConfigEntry<bool> verboseLoggingConfig;
+        internal ConfigEntry<float> expiryWarningSecondsConfig;
+        internal ConfigEntry<bool> expiryWarningEnabledConfig;
 
         private void Awake()
         {
+            Instance = this;
             Log = Logger;
+
+            verboseLoggingConfig = Config.Bind(
+                "Diagnostics",
+                "VerboseLogging",
+                false,
+                "Emit per-frame water-walk decision logs. Off by default — flip on when reporting issues so the log shows why synthetic ground was/wasn't injected.");
+            expiryWarningEnabledConfig = Config.Bind(
+                "Visuals",
+                "ExpiryWarningEnabled",
+                true,
+                "Tint the local player's electromagnet shield orange→red in the final seconds before it expires.");
+            expiryWarningSecondsConfig = Config.Bind(
+                "Visuals",
+                "ExpiryWarningSeconds",
+                3.5f,
+                "Window before shield expiry over which the warning hue ramps in. The first half is orange-tinted, the last half ramps to red.");
+
             WaterSurfaceProxy.EnsureCreated();
             new Harmony(ModGuid).PatchAll();
             Log.LogInfo($"{ModName} v{ModVersion} loaded.");
@@ -54,6 +77,165 @@ namespace BubbleBoi
         }
     }
 
+    // Local-player-only expiry hue warning. Ramps the shield particle renderers' tint from
+    // their base color through orange and into red over the configured trailing window so the
+    // wearer has a visual cue that their shield is about to drop. Other clients can't compute
+    // remaining time (the activation timestamp is local-only on PlayerInfo) so we don't tint
+    // for them — they wouldn't know what to do with the cue anyway.
+    internal sealed class ShieldExpiryTinter : MonoBehaviour
+    {
+        private static readonly Color OrangeWarning = new Color(1f, 0.55f, 0.1f, 1f);
+        private static readonly int[] ColorPropertyIds =
+        {
+            Shader.PropertyToID("_TintColor"),
+            Shader.PropertyToID("_Color"),
+            Shader.PropertyToID("_BaseColor"),
+            Shader.PropertyToID("_EmissionColor"),
+        };
+
+        private static ShieldExpiryTinter instance;
+        private static MaterialPropertyBlock block;
+
+        private PlayerInfo target;
+        private double activationTimestamp;
+        private Renderer[] cachedRenderers;
+        // ParticleSystemRenderer ignores MaterialPropertyBlock for tint — particle color
+        // comes from ParticleSystem.MainModule.startColor. Track each particle system we
+        // touch so we can restore the original color when the warning ends.
+        private readonly System.Collections.Generic.Dictionary<ParticleSystem, ParticleSystem.MinMaxGradient> originalStartColors
+            = new System.Collections.Generic.Dictionary<ParticleSystem, ParticleSystem.MinMaxGradient>();
+        private bool tintApplied;
+
+        public static void OnLocalShieldActivated(PlayerInfo player)
+        {
+            EnsureInstance();
+            instance.target = player;
+            instance.activationTimestamp = Time.timeAsDouble;
+            instance.cachedRenderers = null;
+            instance.originalStartColors.Clear();
+            instance.tintApplied = false;
+        }
+
+        private static void EnsureInstance()
+        {
+            if (instance != null)
+                return;
+            GameObject go = new GameObject("BubbleBoiShieldExpiryTinter");
+            go.hideFlags = HideFlags.HideAndDontSave;
+            DontDestroyOnLoad(go);
+            instance = go.AddComponent<ShieldExpiryTinter>();
+            block = new MaterialPropertyBlock();
+        }
+
+        private void Update()
+        {
+            if (target == null)
+                return;
+            if (!target.IsElectromagnetShieldActive)
+            {
+                if (tintApplied)
+                    ResetTint();
+                target = null;
+                cachedRenderers = null;
+                return;
+            }
+
+            Plugin plugin = Plugin.Instance;
+            if (plugin == null || !plugin.expiryWarningEnabledConfig.Value)
+            {
+                if (tintApplied)
+                    ResetTint();
+                return;
+            }
+
+            float duration = GameManager.ItemSettings != null
+                ? GameManager.ItemSettings.ElectromagnetShieldDuration
+                : 5f;
+            float remaining = duration - (float)(Time.timeAsDouble - activationTimestamp);
+            float window = plugin.expiryWarningSecondsConfig.Value;
+            if (remaining > window || remaining <= 0f)
+            {
+                if (tintApplied)
+                    ResetTint();
+                return;
+            }
+
+            // 0..1 across the warning window. First half goes white→orange, second half
+            // continues orange→red so the visual cue accelerates as time runs out.
+            float t = 1f - (remaining / window);
+            Color tint = t < 0.5f
+                ? Color.Lerp(Color.white, OrangeWarning, t * 2f)
+                : Color.Lerp(OrangeWarning, Color.red, (t - 0.5f) * 2f);
+
+            EnsureRenderers();
+            ApplyTint(tint);
+            tintApplied = true;
+        }
+
+        private void EnsureRenderers()
+        {
+            if (cachedRenderers != null && cachedRenderers.Length > 0)
+                return;
+            if (target == null || target.ElectromagnetShieldCollider == null)
+                return;
+            cachedRenderers = target.ElectromagnetShieldCollider
+                .GetComponentsInChildren<Renderer>(includeInactive: true);
+        }
+
+        private void ApplyTint(Color tint)
+        {
+            if (cachedRenderers == null)
+                return;
+            foreach (Renderer renderer in cachedRenderers)
+            {
+                if (renderer == null)
+                    continue;
+
+                // ParticleSystemRenderer ignores MaterialPropertyBlock color overrides; new
+                // particles take their color from the ParticleSystem.MainModule.startColor.
+                if (renderer is ParticleSystemRenderer && renderer.TryGetComponent(out ParticleSystem ps))
+                {
+                    if (!originalStartColors.ContainsKey(ps))
+                        originalStartColors[ps] = ps.main.startColor;
+                    ParticleSystem.MainModule main = ps.main;
+                    main.startColor = new ParticleSystem.MinMaxGradient(tint);
+                    continue;
+                }
+
+                renderer.GetPropertyBlock(block);
+                foreach (int id in ColorPropertyIds)
+                    block.SetColor(id, tint);
+                renderer.SetPropertyBlock(block);
+            }
+        }
+
+        private void ResetTint()
+        {
+            if (cachedRenderers != null)
+            {
+                foreach (Renderer renderer in cachedRenderers)
+                {
+                    if (renderer == null)
+                        continue;
+                    if (renderer is ParticleSystemRenderer)
+                        continue; // restored below from originalStartColors
+                    // Passing an empty block clears overrides; renderer falls back to whatever
+                    // color the underlying material defines.
+                    renderer.SetPropertyBlock(null);
+                }
+            }
+            foreach (var pair in originalStartColors)
+            {
+                if (pair.Key == null)
+                    continue;
+                ParticleSystem.MainModule main = pair.Key.main;
+                main.startColor = pair.Value;
+            }
+            originalStartColors.Clear();
+            tintApplied = false;
+        }
+    }
+
     [HarmonyPatch]
     internal static class WaterWalkPatches
     {
@@ -68,6 +250,15 @@ namespace BubbleBoi
         [HarmonyPostfix]
         private static void PerformGroundCheckPostfix(PlayerMovement __instance, ref bool __result)
         {
+            // Two-state fix:
+            //  (a) If vanilla finds real ground AT OR ABOVE the water surface (true sand bank /
+            //      fairway / etc.), leave it alone — overriding it would wedge the player into
+            //      our NotTerrain proxy.
+            //  (b) If vanilla finds ground BELOW the water surface (shallow sand floor under
+            //      water), the player is supposed to be water-walking, not standing on the
+            //      submerged sand — proceed with synthetic injection as if no ground was found.
+            // Earlier 0.2.0 returned on any vanilla-found ground, which broke (b) and stranded
+            // the shielded player wading from sand into shallow water.
             if (!TryGetWaterSurfacePoint(__instance, out Vector3 waterPoint, out string reason))
             {
                 if (__result)
@@ -76,6 +267,19 @@ namespace BubbleBoi
                     MaybeLogDecision(__instance, $"synthetic ground skipped: {reason}");
                 TrackInjectedGroundState(__instance, isInjected: false);
                 return;
+            }
+
+            if (__result)
+            {
+                Vector3 vanillaGroundPoint = __instance.GroundData.point;
+                const float SubmergedTolerance = 0.05f;
+                if (vanillaGroundPoint.y >= waterPoint.y - SubmergedTolerance)
+                {
+                    MaybeLogDecision(__instance, $"keeping vanilla ground at y={vanillaGroundPoint.y:F3} (water y={waterPoint.y:F3})");
+                    TrackInjectedGroundState(__instance, isInjected: false);
+                    return;
+                }
+                MaybeLogDecision(__instance, $"vanilla ground submerged y={vanillaGroundPoint.y:F3} < water y={waterPoint.y:F3} — overriding with synthetic surface");
             }
 
             CapsuleCollider uprightCollider = UprightColliderField?.GetValue(__instance) as CapsuleCollider;
@@ -238,6 +442,8 @@ namespace BubbleBoi
         {
             if (movement == null || Plugin.Log == null)
                 return;
+            if (Plugin.Instance == null || !Plugin.Instance.verboseLoggingConfig.Value)
+                return;
 
             int key = movement.GetInstanceID();
             double now = Time.timeAsDouble;
@@ -256,6 +462,16 @@ namespace BubbleBoi
                 $"bounds={(tracker != null ? tracker.AuthoritativeBoundsState.ToString() : "null")} " +
                 $"waterY={(tracker != null ? tracker.CurrentOutOfBoundsHazardWorldHeightLocalOnly.ToString("F3") : "n/a")} " +
                 $"posY={movement.Position.y:F3} :: {message}");
+        }
+
+        // Capture the local-player activation timestamp so the tinter knows when to start
+        // ramping. The game's own copy of this is a private field on PlayerInfo and is local-
+        // only; mirroring it here avoids reflection on the hot path.
+        [HarmonyPatch(typeof(PlayerInfo), nameof(PlayerInfo.LocalPlayerActivateElectromagnetShield))]
+        [HarmonyPostfix]
+        private static void LocalPlayerActivateElectromagnetShieldPostfix(PlayerInfo __instance)
+        {
+            ShieldExpiryTinter.OnLocalShieldActivated(__instance);
         }
 
         private static bool IsWaterHazard(LevelBoundsTracker tracker, BoundsState boundsState)

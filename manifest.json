@@ -1,6 +1,6 @@
 {
   "name": "BubbleBoi",
-  "version_number": "0.1.1",
+  "version_number": "0.2.2",
   "website_url": "https://github.com/Calen-Ray/SBG-mod-BubbleBoi",
   "description": "Lets players walk on water while the electromagnet shield is active.",
   "dependencies": [
